@@ -1,0 +1,147 @@
+blueprint:
+  name: Update all running lights temperatures
+  description: Copy the value from an input_number to the temperature of lights, if they have not been manually modified.
+  source_url: https://raw.githubusercontent.com/Ofenhed/HomeAssistant/master/blueprints/automation/follow-light-temperature.yaml
+  domain: automation
+  input:
+    target_input_number:
+      name: Temperature
+      description: The state to be controlled
+      selector:
+        entity:
+          domain: input_number
+          multiple: false
+    target_lights:
+      name: Lights
+      description: The lights to modify.
+      selector:
+        entity:
+          domain: light
+          multiple: true
+    excessive:
+      name: Repeatedly
+      description: On timer and not only when the temperature match.
+      selector:
+        boolean:
+      default: false
+    force:
+      name: Force
+      description: Force lights to this temperature, even if they aren't close to the old temperature.
+      selector:
+        boolean:
+      default: false
+    on_light_on:
+      name: When light started
+      description: Set temperature when the light is started.
+      selector:
+        boolean:
+      default: false
+    on_system_start:
+      name: When system started
+      description: Set temperature when the Home Assistant is started.
+      selector:
+        boolean:
+      default: false
+    target_enable_toggle:
+      name: Enable with
+      description: When this boolean is true, this rule will trigger.
+      default: []
+      selector:
+        entity:
+          domain: input_boolean
+    brightness_action:
+      name: Brightness
+      description: When a device turns on its color temperature will be set, this
+        may interfere with the brightness, this action will run half a second later
+        to set the light's brightness.
+      selector:
+        action: {}
+      default:
+      - service: light.turn_on
+        data:
+          brightness: '{{max(trigger.to_state.attributes.brightness,2)}}'
+        target:
+          entity_id: '{{trigger.entity_id}}'
+        alias: Default - Set light to its original brightness, don't use brightness
+          1 as it causes issues with some bulbs
+
+    # source_url: https://community.home-assistant.io/t/automatic-circadian-lighting-match-your-lights-color-temperature-to-the-sun/472105
+variables:
+  target_input_number: !input target_input_number
+  target_lights: !input target_lights
+  force: !input force
+  excessive: !input excessive
+  color_temp: '{{ states(target_input_number) | int }}'
+  target_chosen_lights: '
+    {% set min_temperature = ((trigger.from_state.state | int) - 6) if (trigger | contains("from_state")) and trigger.id == new_value else (color_temp - 6) %}
+    {% set max_temperature = ((trigger.from_state.state | int) + 6) if (trigger | contains("from_state")) and trigger.id == new_value else (color_temp + 6) %}
+    {% set active_ligths = expand(target_lights) | selectattr("state","eq","on") |
+    selectattr("attributes.supported_color_modes","contains","color_temp") %}
+    {% set matching_lights = active_ligths |
+      selectattr("attributes.color_temp", "gt", min_temperature) |
+      selectattr("attributes.color_temp", "lt", max_temperature) %}
+    {{ (active_ligths if force else matching_lights) | map(attribute="entity_id") | list }}'
+  target_enable_input: !input target_enable_toggle
+  target_enable: '{{ (states(target_enable_input) == "on") if target_enable_input != [] else true }}'
+  on_light_on: !input on_light_on
+  on_system_start: !input on_system_start
+trigger:
+- platform: state
+  entity_id:
+  - !input target_input_number
+  id: new_value
+- platform: homeassistant
+  event: start
+  id: home_start
+  enabled: !input on_system_start
+- platform: state
+  entity_id: !input target_lights
+  to: 'on'
+  id: single_light_on
+  enabled: !input on_light_on
+- platform: time_pattern
+  minutes: '5'
+  id: every_5_min
+  enabled: !input excessive
+- platform: state
+  entity_id: !input target_enable_toggle
+  to: 'on'
+  id: automation_enabled
+condition:
+  - condition: template
+    value_template: '{{ target_enable }}'
+action:
+- choose:
+  - conditions:
+    - condition: trigger
+      id: single_light_on
+    sequence:
+    - service: light.turn_on
+      data:
+        color_temp: '{{color_temp}}'
+        transition: 0
+      target:
+        entity_id: '{{trigger.entity_id}}'
+    - delay:
+        milliseconds: 500
+    - choose:
+      default: !input brightness_action
+  - conditions:
+    - condition: or
+      conditions:
+        - condition: trigger
+          id: new_value
+        - condition: trigger
+          id: every_5_min
+        - condition: trigger
+          id: home_start
+        - condition: trigger
+          id: automation_enabled
+    sequence:
+    - service: light.turn_on
+      data:
+        color_temp: '{{color_temp}}'
+        transition: 0
+      target:
+        entity_id: '{{target_chosen_lights}}'
+mode: parallel

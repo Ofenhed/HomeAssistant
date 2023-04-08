@@ -1,0 +1,127 @@
+blueprint:
+  name: Auto Media Player Dimming
+  description: Turn the lights off when media is playing
+  source_url: https://raw.githubusercontent.com/Ofenhed/HomeAssistant/master/blueprints/automation/chromecast.yaml
+  domain: automation
+  input:
+    target_player:
+      name: Player
+      description: The player to control the lights
+      selector:
+        entity:
+          domain: media_player
+          multiple: false
+    target_lights:
+      name: Lights
+      description: The lights to be controlled
+      selector:
+        entity:
+          domain: light
+          multiple: false
+    light_on_action:
+      name: Turn on action
+      description: The action to perform when turning the lights back on.
+      selector:
+        action: {}
+      default:
+      - service: light.turn_on
+        data:
+          transition: 5
+        target:
+          entity_id: '{{active_lights}}'
+    dim_app_id:
+      name: Always dim for app
+      description: When this app is running, always dim lights. Default is Jellyfin.
+      selector:
+        text:
+          multiline: false
+      default: "F007D354"
+          # source_url: https://community.home-assistant.io/t/automatic-circadian-lighting-match-your-lights-color-temperature-to-the-sun/472105
+variables:
+  target_lights: !input target_lights
+  active_lights: '{{ expand(target_lights) | selectattr("state","eq","on") | map(attribute="entity_id") | list }}'
+  target_player: !input target_player
+  target_player_device: '{{ device_id(target_player) }}'
+trigger:
+  - platform: state
+    entity_id:
+      - !input target_player
+    id: dimmed_by_playing
+    to: playing
+  - platform: state
+    entity_id:
+      - !input target_player
+    attribute: app_id
+    id: dimmed_by_app
+    to: !input dim_app_id
+condition:
+  - condition: not
+    conditions:
+      - condition: state
+        entity_id: !input target_player
+        attribute: media_content_type
+        state: music
+  - condition: state
+    entity_id: !input target_lights
+    state: "on"
+action:
+  - service: light.turn_off
+    data:
+      transition: 3
+    target:
+      entity_id: '{{ active_lights }}'
+  - repeat:
+      while:
+        - condition: and
+          conditions:
+            - condition: state
+              entity_id: !input target_lights
+              state: "off"
+            - condition: or
+              conditions:
+              - condition: and
+                conditions:
+                  - condition: trigger
+                    id: dimmed_by_playing
+                  - condition: or
+                    conditions:
+                    - condition: device
+                      device_id: '{{ target_player_device }}'
+                      domain: media_player
+                      entity_id: !input target_player
+                      type: is_playing
+                    - condition: device
+                      device_id: '{{ target_player_device }}'
+                      domain: media_player
+                      entity_id: !input target_player
+                      type: is_buffering
+              - condition: and
+                conditions:
+                  - condition: trigger
+                    id: dimmed_by_app
+                  - condition: state
+                    entity_id: !input target_player
+                    attribute: app_id
+                    state: !input dim_app_id
+      sequence:
+        - wait_for_trigger:
+            - platform: state
+              entity_id: !input target_lights
+              from: "off"
+              id: aborted
+            - platform: device
+              type: changed_states
+              device_id: '{{ target_player_device }}'
+              entity_id: !input target_player
+              domain: media_player
+              id: change
+            - platform: state
+              entity_id:
+                - !input target_player
+              attribute: app_id
+              id: change
+  - if:
+      - condition: template
+        value_template: "{{ wait.trigger.id == 'change' }}"
+    then: !input light_on_action
+mode: single

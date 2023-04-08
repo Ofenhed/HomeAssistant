@@ -1,0 +1,43 @@
+blueprint:
+  name: Store Outside Colour Temperature
+  description: Set an input select to the temperature of the sun.
+  source_url: https://raw.githubusercontent.com/Ofenhed/HomeAssistant/master/blueprints/automation/automatic-circadian-lighting-match-your-lights-color-temperature-to-the-sun.yaml
+  # Insipred by source_url: https://community.home-assistant.io/t/automatic-circadian-lighting-match-your-lights-color-temperature-to-the-sun/472105
+  domain: automation
+  input:
+    target_input_number:
+      name: Target
+      description: The state to be controlled
+      selector:
+        entity:
+          domain: input_number
+          multiple: false
+variables:
+  target_input_number: !input target_input_number
+  min_color_temp: '{{state_attr(target_input_number, ''min'')}}'
+  max_color_temp: '{{state_attr(target_input_number, ''max'')}}'
+  color_temp: '{{ [([((1000000/(4791.67 - 3290.66/(1 + 0.222 * ([([0,state_attr(''sun.sun'',
+    ''elevation'')]|max),90]|min**0.81))))|int),min_color_temp]|max),max_color_temp]|min}}'
+trigger:
+- platform: state
+  entity_id:
+  - sun.sun
+  attribute: elevation
+- platform: state
+  entity_id:
+  - !input target_input_number
+  attribute: min
+- platform: state
+  entity_id:
+  - !input target_input_number
+  attribute: max
+- platform: homeassistant
+  event: start
+condition: []
+action:
+- service: input_number.set_value
+  data:
+    value: '{{color_temp}}'
+  target:
+    entity_id: '{{target_input_number}}'
+mode: restart
